@@ -179,6 +179,71 @@ const initialMealsData = [
   }
 ];
 
+const getLocalDateString = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const makeMealDaySnapshot = (mealList) => ({
+  meals: mealList.map(meal => ({
+    id: meal.id,
+    eaten: Boolean(meal.eaten),
+    ingredients: meal.ingredients.map(ing => ({ id: ing.id, selected: Boolean(ing.selected) }))
+  }))
+});
+
+const applyMealDaySnapshot = (mealDefinitions, snapshot) => {
+  if (!snapshot || !Array.isArray(snapshot.meals)) {
+    return mealDefinitions.map(meal => {
+      const originalMeal = initialMealsData.find(item => item.id === meal.id);
+      return {
+        ...meal,
+        eaten: false,
+        ingredients: meal.ingredients.map(ing => {
+          const originalIngredient = originalMeal?.ingredients.find(item => item.id === ing.id);
+          return { ...ing, selected: originalIngredient ? Boolean(originalIngredient.selected) : true };
+        })
+      };
+    });
+  }
+  const savedMeals = new Map(snapshot.meals.map(meal => [meal.id, meal]));
+  return mealDefinitions.map(meal => {
+    const savedMeal = savedMeals.get(meal.id);
+    const savedIngredients = new Map((savedMeal?.ingredients || []).map(ing => [ing.id, ing]));
+    const originalMeal = initialMealsData.find(item => item.id === meal.id);
+    return {
+      ...meal,
+      eaten: savedMeal ? Boolean(savedMeal.eaten) : false,
+      ingredients: meal.ingredients.map(ing => {
+        const originalIngredient = originalMeal?.ingredients.find(item => item.id === ing.id);
+        return {
+          ...ing,
+          // A date with no saved checklist starts from the original preset selection,
+          // while newly added ingredients start selected.
+          selected: savedIngredients.has(ing.id)
+            ? Boolean(savedIngredients.get(ing.id).selected)
+            : (originalIngredient ? Boolean(originalIngredient.selected) : true)
+        };
+      })
+    };
+  });
+};
+
+const calculateMealTotals = (mealList) => mealList.reduce((totals, meal) => {
+  if (!meal.eaten) return totals;
+  meal.ingredients.forEach(ing => {
+    if (ing.selected) {
+      totals.calories += Number(ing.calories) || 0;
+      totals.protein += Number(ing.protein) || 0;
+      totals.carbs += Number(ing.carbs) || 0;
+      totals.fat += Number(ing.fat) || 0;
+    }
+  });
+  return totals;
+}, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
 
@@ -208,7 +273,36 @@ export default function App() {
 
   const [meals, setMeals] = useState(() => {
     const saved = localStorage.getItem('wg_meals');
-    return saved ? JSON.parse(saved) : initialMealsData;
+    let mealDefinitions = initialMealsData;
+    if (saved) {
+      try { mealDefinitions = JSON.parse(saved) || initialMealsData; } catch { mealDefinitions = initialMealsData; }
+    }
+    // On refresh, always open today's checklist rather than whichever date was last viewed.
+    const savedDailyLogs = localStorage.getItem('wg_meal_daily_logs');
+    if (savedDailyLogs) {
+      try {
+        const dailyLogs = JSON.parse(savedDailyLogs) || {};
+        if (dailyLogs[getLocalDateString()]) {
+          return applyMealDaySnapshot(mealDefinitions, dailyLogs[getLocalDateString()]);
+        }
+      } catch { /* Fall back to the saved meal definitions below. */ }
+    }
+    return mealDefinitions;
+  });
+
+  const [selectedMealDate, setSelectedMealDate] = useState(() => getLocalDateString());
+  const [mealDailyLogs, setMealDailyLogs] = useState(() => {
+    const savedDailyLogs = localStorage.getItem('wg_meal_daily_logs');
+    if (savedDailyLogs) {
+      try { return JSON.parse(savedDailyLogs) || {}; } catch { return {}; }
+    }
+    // One-time migration: retain the current meal checklist as today's starting record.
+    const savedMeals = localStorage.getItem('wg_meals');
+    let currentMeals = initialMealsData;
+    if (savedMeals) {
+      try { currentMeals = JSON.parse(savedMeals) || initialMealsData; } catch { currentMeals = initialMealsData; }
+    }
+    return { [getLocalDateString()]: makeMealDaySnapshot(currentMeals) };
   });
 
   const [nutritionLogs, setNutritionLogs] = useState(() => {
@@ -278,6 +372,32 @@ export default function App() {
   }, [meals]);
 
   useEffect(() => {
+    localStorage.setItem('wg_meal_daily_logs', JSON.stringify(mealDailyLogs));
+  }, [mealDailyLogs]);
+
+  // Keep the selected date's checklist and its automatically calculated nutrition entry in sync.
+  useEffect(() => {
+    setMealDailyLogs(prev => ({ ...prev, [selectedMealDate]: makeMealDaySnapshot(meals) }));
+    const totals = calculateMealTotals(meals);
+    const hasEatenMeal = meals.some(meal => meal.eaten);
+    setNutritionLogs(prev => {
+      const withoutThisDateAutoEntry = prev.filter(log => !(log.date === selectedMealDate && log.source === 'meals'));
+      if (!hasEatenMeal) return withoutThisDateAutoEntry;
+      const existingAuto = prev.find(log => log.date === selectedMealDate && log.source === 'meals');
+      return [{
+        id: existingAuto?.id || `meals-${selectedMealDate}`,
+        source: 'meals',
+        date: selectedMealDate,
+        calories: totals.calories,
+        protein: totals.protein,
+        carbs: totals.carbs,
+        fat: totals.fat,
+        notes: 'Automatically calculated from Meals tab'
+      }, ...withoutThisDateAutoEntry];
+    });
+  }, [meals, selectedMealDate]);
+
+  useEffect(() => {
     localStorage.setItem('wg_nutrition_logs', JSON.stringify(nutritionLogs));
   }, [nutritionLogs]);
 
@@ -321,34 +441,23 @@ export default function App() {
   }, [profile]);
 
   // --- DAILY CONSUMPTION TOTALS (ONLY ADDED IF EATEN IS TRUE) ---
+  const selectedMealTotals = useMemo(() => calculateMealTotals(meals), [meals]);
   const todayTotals = useMemo(() => {
-    let totalCalories = 0;
-    let totalProtein = 0;
-    let totalCarbs = 0;
-    let totalFat = 0;
-
-    meals.forEach(meal => {
-      if (meal.eaten) {
-        meal.ingredients.forEach(ing => {
-          if (ing.selected) {
-            totalCalories += ing.calories || 0;
-            totalProtein += ing.protein || 0;
-            totalCarbs += ing.carbs || 0;
-            totalFat += ing.fat || 0;
-          }
-        });
-      }
-    });
-
-    return {
-      calories: totalCalories,
-      protein: totalProtein,
-      carbs: totalCarbs,
-      fat: totalFat
-    };
-  }, [meals]);
+    const today = getLocalDateString();
+    const todayMealView = applyMealDaySnapshot(meals, mealDailyLogs[today]);
+    return calculateMealTotals(todayMealView);
+  }, [meals, mealDailyLogs]);
 
   // --- HANDLERS ---
+  const handleMealDateChange = (nextDate) => {
+    if (!nextDate || nextDate === selectedMealDate) return;
+    // Save the current checklist before loading the requested day's independent checklist.
+    setMealDailyLogs(prev => ({ ...prev, [selectedMealDate]: makeMealDaySnapshot(meals) }));
+    const snapshot = mealDailyLogs[nextDate];
+    setMeals(prev => applyMealDaySnapshot(prev, snapshot));
+    setSelectedMealDate(nextDate);
+  };
+
   const handleToggleMealEaten = (mealId) => {
     setMeals(prev => prev.map(meal => 
       meal.id === mealId ? { ...meal, eaten: !meal.eaten } : meal
@@ -431,6 +540,7 @@ export default function App() {
     e.preventDefault();
     const newEntry = {
       id: Date.now().toString(),
+      source: 'manual',
       date: nutritionForm.date,
       calories: parseInt(nutritionForm.calories) || todayTotals.calories,
       protein: parseInt(nutritionForm.protein) || todayTotals.protein,
@@ -439,7 +549,10 @@ export default function App() {
       notes: nutritionForm.notes
     };
 
-    setNutritionLogs(prev => [newEntry, ...prev.filter(l => l.date !== newEntry.date)]);
+    setNutritionLogs(prev => [
+      newEntry,
+      ...prev.filter(l => l.date !== newEntry.date || l.source === 'meals')
+    ]);
     setIsNutritionModalOpen(false);
   };
 
@@ -711,7 +824,7 @@ export default function App() {
                   Today's 7 Meals Summary
                 </h2>
                 <button 
-                  onClick={() => setActiveTab('meals')}
+                  onClick={() => { handleMealDateChange(getLocalDateString()); setActiveTab('meals'); }}
                   className="text-xs text-emerald-400 hover:underline font-bold flex items-center gap-0.5"
                 >
                   Manage <ChevronRight className="w-3.5 h-3.5" />
@@ -719,7 +832,7 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {meals.map((meal) => {
+                {applyMealDaySnapshot(meals, mealDailyLogs[getLocalDateString()]).map((meal) => {
                   const activeIngs = meal.ingredients.filter(i => i.selected);
                   const mealCal = meal.eaten ? activeIngs.reduce((acc, i) => acc + i.calories, 0) : 0;
                   const mealProt = meal.eaten ? activeIngs.reduce((acc, i) => acc + i.protein, 0) : 0;
@@ -740,7 +853,7 @@ export default function App() {
                         </span>
                       </div>
                       <button 
-                        onClick={() => handleToggleMealEaten(meal.id)}
+                        onClick={() => { handleMealDateChange(getLocalDateString()); setActiveTab('meals'); }}
                         className={`px-3 py-1 rounded-xl text-[10px] font-bold transition-all ${
                           meal.eaten 
                             ? 'bg-emerald-500 text-slate-950 font-black' 
@@ -768,27 +881,41 @@ export default function App() {
                   Daily 7-Meal Ingredient Log
                 </h2>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Toggle <span className="text-emerald-400 font-semibold">Eaten</span> state to calculate your active calorie intake.
+                  Select a date, mark meals as <span className="text-emerald-400 font-semibold">Eaten</span>, and choose the ingredients consumed. Nutrition history updates automatically.
                 </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label htmlFor="meal-log-date" className="text-xs font-semibold text-slate-300">Log date</label>
+                  <input
+                    id="meal-log-date"
+                    type="date"
+                    value={selectedMealDate}
+                    onChange={(e) => handleMealDateChange(e.target.value)}
+                    className="bg-slate-800 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-emerald-500"
+                  />
+                  {selectedMealDate !== getLocalDateString() && (
+                    <button type="button" onClick={() => handleMealDateChange(getLocalDateString())}
+                      className="text-xs font-bold text-emerald-400 hover:text-emerald-300">Back to today</button>
+                  )}
+                </div>
               </div>
 
               {/* Dynamic Live Totals Pill */}
               <div className="grid grid-cols-4 gap-2 pt-2 border-t border-slate-800">
                 <div className="bg-slate-800/50 p-2 rounded-xl text-center">
                   <span className="text-[10px] text-slate-400 block">Calories</span>
-                  <span className="font-black text-amber-400 text-xs sm:text-sm">{todayTotals.calories}</span>
+                  <span className="font-black text-amber-400 text-xs sm:text-sm">{selectedMealTotals.calories}</span>
                 </div>
                 <div className="bg-slate-800/50 p-2 rounded-xl text-center">
                   <span className="text-[10px] text-slate-400 block">Protein</span>
-                  <span className="font-bold text-purple-400 text-xs sm:text-sm">{todayTotals.protein}g</span>
+                  <span className="font-bold text-purple-400 text-xs sm:text-sm">{selectedMealTotals.protein}g</span>
                 </div>
                 <div className="bg-slate-800/50 p-2 rounded-xl text-center">
                   <span className="text-[10px] text-slate-400 block">Carbs</span>
-                  <span className="font-bold text-cyan-400 text-xs sm:text-sm">{todayTotals.carbs}g</span>
+                  <span className="font-bold text-cyan-400 text-xs sm:text-sm">{selectedMealTotals.carbs}g</span>
                 </div>
                 <div className="bg-slate-800/50 p-2 rounded-xl text-center">
                   <span className="text-[10px] text-slate-400 block">Fat</span>
-                  <span className="font-bold text-amber-300 text-xs sm:text-sm">{todayTotals.fat}g</span>
+                  <span className="font-bold text-amber-300 text-xs sm:text-sm">{selectedMealTotals.fat}g</span>
                 </div>
               </div>
             </div>
