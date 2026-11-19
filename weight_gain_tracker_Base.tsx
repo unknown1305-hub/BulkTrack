@@ -179,28 +179,11 @@ const initialMealsData = [
   }
 ];
 
-// --- INITIAL NUTRITION LOGS ---
-const initialNutritionLogs = [
-  { id: 'n1', date: '2026-10-18', calories: 2850, protein: 140, carbs: 320, fat: 85, notes: 'Full day completed' },
-  { id: 'n2', date: '2026-10-19', calories: 2900, protein: 145, carbs: 330, fat: 88, notes: 'Added shake' },
-  { id: 'n3', date: '2026-10-20', calories: 2750, protein: 135, carbs: 310, fat: 80, notes: 'Skipped snack' },
-  { id: 'n4', date: '2026-10-21', calories: 3000, protein: 150, carbs: 350, fat: 92, notes: 'Great intake' },
-  { id: 'n5', date: '2026-10-22', calories: 2950, protein: 148, carbs: 340, fat: 90, notes: 'Met targets' },
-  { id: 'n6', date: '2026-10-23', calories: 3050, protein: 152, carbs: 355, fat: 94, notes: 'On track' },
-];
-
-// --- INITIAL WEIGHT LOGS ---
-const initialWeightLogs = [
-  { id: 'w1', date: '2026-10-01', weight: 60.0, notes: 'Starting weight check' },
-  { id: 'w2', date: '2026-10-08', weight: 60.4, notes: 'Week 1 check-in' },
-  { id: 'w3', date: '2026-10-15', weight: 60.9, notes: 'Mid month check' },
-  { id: 'w4', date: '2026-10-22', weight: 61.4, notes: 'Feeling stronger' },
-];
-
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  // Load Tailwind CSS script dynamically if runtime environment requires it
+  // Keep the current online styling intact; this will be replaced by bundled
+  // local Tailwind CSS when offline/PWA support is added in the next stage.
   useEffect(() => {
     if (!document.getElementById('tailwind-script')) {
       const script = document.createElement('script');
@@ -211,18 +194,26 @@ export default function App() {
   }, []);
 
   const [profile, setProfile] = useState(() => {
+    // Clear the old demonstration profile and logs once after this update.
+    // Deliberately preserve wg_meals so all seven preset meals remain unchanged.
+    if (localStorage.getItem('wg_clean_start_v1') !== 'done') {
+      localStorage.removeItem('wg_profile');
+      localStorage.removeItem('wg_nutrition_logs');
+      localStorage.removeItem('wg_weight_logs');
+      localStorage.setItem('wg_clean_start_v1', 'done');
+    }
     const saved = localStorage.getItem('wg_profile');
     return saved ? JSON.parse(saved) : {
-      gender: 'female',
-      breastfeeding: 'no',
-      startingDate: '2026-10-01',
-      startWeight: 60.0,
-      currentWeight: 61.4,
-      targetWeight: 68.0,
-      height: 168,
-      age: 26,
-      activityLevel: 1.375,
-      surplusGoal: 500,
+      gender: '',
+      breastfeeding: '',
+      startingDate: '',
+      startWeight: '',
+      currentWeight: '',
+      targetWeight: '',
+      height: '',
+      age: '',
+      activityLevel: '',
+      surplusGoal: '',
     };
   });
 
@@ -233,12 +224,12 @@ export default function App() {
 
   const [nutritionLogs, setNutritionLogs] = useState(() => {
     const saved = localStorage.getItem('wg_nutrition_logs');
-    return saved ? JSON.parse(saved) : initialNutritionLogs;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [weightLogs, setWeightLogs] = useState(() => {
     const saved = localStorage.getItem('wg_weight_logs');
-    return saved ? JSON.parse(saved) : initialWeightLogs;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [selectedNutritionMonth, setSelectedNutritionMonth] = useState(() => {
@@ -285,7 +276,7 @@ export default function App() {
 
   const [weightForm, setWeightForm] = useState({
     date: new Date().toISOString().split('T')[0],
-    weight: profile.currentWeight || 60.0,
+    weight: profile.currentWeight || '',
     notes: ''
   });
 
@@ -307,40 +298,37 @@ export default function App() {
 
   // --- DYNAMIC TARGET CALCULATIONS ---
   const calculatedTargets = useMemo(() => {
-    const { gender, weight, height, age, activityLevel, surplusGoal, breastfeeding } = {
-      ...profile,
-      weight: profile.currentWeight || profile.startWeight || 60
-    };
+    const weight = Number(profile.currentWeight || profile.startWeight || 0);
+    const height = Number(profile.height || 0);
+    const age = Number(profile.age || 0);
+    const activityLevel = Number(profile.activityLevel || 0);
+    const surplusGoal = Number(profile.surplusGoal || 0);
+    const isProfileComplete = weight > 0 && height > 0 && age > 0 && activityLevel > 0 &&
+      surplusGoal >= 0 && (profile.gender === 'male' || profile.gender === 'female') &&
+      (profile.breastfeeding === 'yes' || profile.breastfeeding === 'no');
 
-    let bmr = (10 * weight) + (6.25 * height) - (5 * age);
-    if (gender === 'male') {
-      bmr += 5;
-    } else {
-      bmr -= 161;
+    if (!isProfileComplete) {
+      return { isProfileComplete: false, bmr: 0, maintenance: 0, breastfeedingAddon: 0,
+        targetCalories: 0, targetProtein: 0, targetFat: 0, targetCarbs: 0 };
     }
 
-    let maintenance = bmr * activityLevel;
-    let breastfeedingAddon = (gender === 'female' && breastfeeding === 'yes') ? 500 : 0;
-    const targetCalories = Math.round(maintenance + surplusGoal + breastfeedingAddon);
+    let bmr = (10 * weight) + (6.25 * height) - (5 * age);
+    if (profile.gender === 'male') bmr += 5;
+    else bmr -= 161;
 
-    const proteinFactor = (gender === 'female' && breastfeeding === 'yes') ? 2.2 : 2.0;
+    const maintenance = bmr * activityLevel;
+    const breastfeedingAddon = (profile.gender === 'female' && profile.breastfeeding === 'yes') ? 500 : 0;
+    const targetCalories = Math.round(maintenance + surplusGoal + breastfeedingAddon);
+    const proteinFactor = (profile.gender === 'female' && profile.breastfeeding === 'yes') ? 2.2 : 2.0;
     const targetProtein = Math.round(weight * proteinFactor);
     const targetFat = Math.round((targetCalories * 0.25) / 9);
-
     const proteinCalories = targetProtein * 4;
     const fatCalories = targetFat * 9;
     const remainingCalories = targetCalories - (proteinCalories + fatCalories);
     const targetCarbs = Math.max(0, Math.round(remainingCalories / 4));
 
-    return {
-      bmr: Math.round(bmr),
-      maintenance: Math.round(maintenance),
-      breastfeedingAddon,
-      targetCalories,
-      targetProtein,
-      targetFat,
-      targetCarbs
-    };
+    return { isProfileComplete: true, bmr: Math.round(bmr), maintenance: Math.round(maintenance),
+      breastfeedingAddon, targetCalories, targetProtein, targetFat, targetCarbs };
   }, [profile]);
 
   // --- DAILY CONSUMPTION TOTALS (ONLY ADDED IF EATEN IS TRUE) ---
@@ -538,7 +526,7 @@ export default function App() {
               onClick={() => {
                 setWeightForm({
                   date: new Date().toISOString().split('T')[0],
-                  weight: profile.currentWeight || 60.0,
+                  weight: profile.currentWeight || '',
                   notes: ''
                 });
                 setIsWeightModalOpen(true);
@@ -614,7 +602,7 @@ export default function App() {
                   <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Today's Calorie Goal</span>
                 </div>
                 <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-                  +{profile.surplusGoal} kcal surplus
+                  +{profile.surplusGoal || '—'} kcal surplus
                 </span>
               </div>
 
@@ -631,7 +619,7 @@ export default function App() {
                     />
                     <path
                       className="text-emerald-400 transition-all duration-1000 ease-out"
-                      strokeDasharray={`${Math.min(100, Math.round((todayTotals.calories / calculatedTargets.targetCalories) * 100))}, 100`}
+                      strokeDasharray={`${(calculatedTargets.targetCalories > 0 ? Math.min(100, Math.round(todayTotals.calories / calculatedTargets.targetCalories * 100)) : 0)}, 100`}
                       strokeWidth="3.5"
                       strokeLinecap="round"
                       stroke="currentColor"
@@ -641,7 +629,7 @@ export default function App() {
                   </svg>
                   <div className="absolute text-center flex flex-col items-center">
                     <span className="text-2xl font-black text-white tracking-tight">{todayTotals.calories}</span>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">/ {calculatedTargets.targetCalories} kcal</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">/ {calculatedTargets.isProfileComplete ? calculatedTargets.targetCalories : '—'} kcal</span>
                   </div>
                 </div>
 
@@ -650,24 +638,24 @@ export default function App() {
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-400">Target Remaining</span>
                     <span className="font-bold text-emerald-400">
-                      {Math.max(0, calculatedTargets.targetCalories - todayTotals.calories)} kcal
+                      {calculatedTargets.isProfileComplete ? Math.max(0, calculatedTargets.targetCalories - todayTotals.calories) + ' kcal' : 'Complete profile to calculate'}
                     </span>
                   </div>
                   <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                     <div 
                       className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-500"
-                      style={{ width: `${Math.min(100, (todayTotals.calories / calculatedTargets.targetCalories) * 100)}%` }}
+                      style={{ width: `${Math.min(100, (calculatedTargets.targetCalories > 0 ? todayTotals.calories / calculatedTargets.targetCalories * 100 : 0))}%` }}
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80">
                     <div className="bg-slate-800/40 p-2.5 rounded-xl border border-slate-800">
                       <span className="text-[10px] text-slate-400 block">Current Weight</span>
-                      <span className="text-sm font-black text-white">{profile.currentWeight} <span className="text-xs text-emerald-400 font-semibold">kg</span></span>
+                      <span className="text-sm font-black text-white">{profile.currentWeight || '—'} <span className="text-xs text-emerald-400 font-semibold">kg</span></span>
                     </div>
                     <div className="bg-slate-800/40 p-2.5 rounded-xl border border-slate-800">
                       <span className="text-[10px] text-slate-400 block">Target Weight</span>
-                      <span className="text-sm font-black text-slate-200">{profile.targetWeight} <span className="text-xs text-slate-500 font-semibold">kg</span></span>
+                      <span className="text-sm font-black text-slate-200">{profile.targetWeight || '—'} <span className="text-xs text-slate-500 font-semibold">kg</span></span>
                     </div>
                   </div>
                 </div>
@@ -689,10 +677,10 @@ export default function App() {
                       <span className="w-2 h-2 rounded-full bg-purple-400" />
                       Protein
                     </span>
-                    <span className="font-semibold text-slate-300">{todayTotals.protein} <span className="text-slate-500">/ {calculatedTargets.targetProtein}g</span></span>
+                    <span className="font-semibold text-slate-300">{todayTotals.protein} <span className="text-slate-500">/ {calculatedTargets.isProfileComplete ? calculatedTargets.targetProtein : '—'}g</span></span>
                   </div>
                   <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                    <div className="bg-purple-500 h-full transition-all duration-300" style={{ width: `${Math.min(100, (todayTotals.protein / calculatedTargets.targetProtein) * 100)}%` }} />
+                    <div className="bg-purple-500 h-full transition-all duration-300" style={{ width: `${Math.min(100, (calculatedTargets.targetProtein > 0 ? todayTotals.protein / calculatedTargets.targetProtein * 100 : 0))}%` }} />
                   </div>
                 </div>
 
@@ -703,10 +691,10 @@ export default function App() {
                       <span className="w-2 h-2 rounded-full bg-cyan-400" />
                       Carbohydrates
                     </span>
-                    <span className="font-semibold text-slate-300">{todayTotals.carbs} <span className="text-slate-500">/ {calculatedTargets.targetCarbs}g</span></span>
+                    <span className="font-semibold text-slate-300">{todayTotals.carbs} <span className="text-slate-500">/ {calculatedTargets.isProfileComplete ? calculatedTargets.targetCarbs : '—'}g</span></span>
                   </div>
                   <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                    <div className="bg-cyan-500 h-full transition-all duration-300" style={{ width: `${Math.min(100, (todayTotals.carbs / calculatedTargets.targetCarbs) * 100)}%` }} />
+                    <div className="bg-cyan-500 h-full transition-all duration-300" style={{ width: `${Math.min(100, (calculatedTargets.targetCarbs > 0 ? todayTotals.carbs / calculatedTargets.targetCarbs * 100 : 0))}%` }} />
                   </div>
                 </div>
 
@@ -717,10 +705,10 @@ export default function App() {
                       <span className="w-2 h-2 rounded-full bg-amber-400" />
                       Healthy Fats
                     </span>
-                    <span className="font-semibold text-slate-300">{todayTotals.fat} <span className="text-slate-500">/ {calculatedTargets.targetFat}g</span></span>
+                    <span className="font-semibold text-slate-300">{todayTotals.fat} <span className="text-slate-500">/ {calculatedTargets.isProfileComplete ? calculatedTargets.targetFat : '—'}g</span></span>
                   </div>
                   <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                    <div className="bg-amber-400 h-full transition-all duration-300" style={{ width: `${Math.min(100, (todayTotals.fat / calculatedTargets.targetFat) * 100)}%` }} />
+                    <div className="bg-amber-400 h-full transition-all duration-300" style={{ width: `${Math.min(100, (calculatedTargets.targetFat > 0 ? todayTotals.fat / calculatedTargets.targetFat * 100 : 0))}%` }} />
                   </div>
                 </div>
               </div>
@@ -1125,7 +1113,7 @@ export default function App() {
                   <div className="bg-slate-900/90 border border-slate-800 rounded-3xl overflow-hidden shadow-lg divide-y divide-slate-800/60">
                     {filteredLogs.length > 0 ? (
                       filteredLogs.slice().reverse().map((log) => {
-                        const isTargetMet = (log.calories || 0) >= calculatedTargets.targetCalories;
+                        const isTargetMet = calculatedTargets.isProfileComplete && (log.calories || 0) >= calculatedTargets.targetCalories;
                         return (
                           <div key={log.id} className="p-3.5 flex items-center justify-between hover:bg-slate-800/30">
                             <div className="space-y-1">
@@ -1181,12 +1169,12 @@ export default function App() {
                 
                 <div className="flex justify-between items-center p-3 bg-slate-800/40 rounded-2xl border border-slate-800 text-xs">
                   <span className="text-slate-300">Basal Metabolic Rate (BMR)</span>
-                  <span className="font-bold text-white">{calculatedTargets.bmr} kcal</span>
+                  <span className="font-bold text-white">{calculatedTargets.isProfileComplete ? calculatedTargets.bmr : 'Complete profile'} kcal</span>
                 </div>
 
                 <div className="flex justify-between items-center p-3 bg-slate-800/40 rounded-2xl border border-slate-800 text-xs">
                   <span className="text-slate-300">Maintenance Intake (TDEE)</span>
-                  <span className="font-bold text-white">{calculatedTargets.maintenance} kcal</span>
+                  <span className="font-bold text-white">{calculatedTargets.isProfileComplete ? calculatedTargets.maintenance : 'Complete profile'} kcal</span>
                 </div>
 
                 {calculatedTargets.breastfeedingAddon > 0 && (
@@ -1198,12 +1186,12 @@ export default function App() {
 
                 <div className="flex justify-between items-center p-3 bg-slate-800/40 rounded-2xl border border-slate-800 text-xs">
                   <span className="text-amber-400 font-medium">Weight Surplus Goal</span>
-                  <span className="font-bold text-amber-400">+{profile.surplusGoal} kcal</span>
+                  <span className="font-bold text-amber-400">+{profile.surplusGoal || '—'} kcal</span>
                 </div>
 
                 <div className="flex justify-between items-center p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
                   <span className="text-xs font-bold text-emerald-400">Target Daily Intake</span>
-                  <span className="font-black text-emerald-400 text-base">{calculatedTargets.targetCalories} kcal</span>
+                  <span className="font-black text-emerald-400 text-base">{calculatedTargets.isProfileComplete ? calculatedTargets.targetCalories : '—'} kcal</span>
                 </div>
               </div>
 
@@ -1212,17 +1200,17 @@ export default function App() {
 
                 <div className="p-3 bg-slate-800/40 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">
                   <span className="font-bold text-purple-400">Protein Target</span>
-                  <span className="font-black text-white text-base">{calculatedTargets.targetProtein} g</span>
+                  <span className="font-black text-white text-base">{calculatedTargets.isProfileComplete ? calculatedTargets.targetProtein : 'Complete profile'} g</span>
                 </div>
 
                 <div className="p-3 bg-slate-800/40 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">
                   <span className="font-bold text-cyan-400">Carbohydrates Target</span>
-                  <span className="font-black text-white text-base">{calculatedTargets.targetCarbs} g</span>
+                  <span className="font-black text-white text-base">{calculatedTargets.isProfileComplete ? calculatedTargets.targetCarbs : 'Complete profile'} g</span>
                 </div>
 
                 <div className="p-3 bg-slate-800/40 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">
                   <span className="font-bold text-amber-300">Healthy Fats Target</span>
-                  <span className="font-black text-white text-base">{calculatedTargets.targetFat} g</span>
+                  <span className="font-black text-white text-base">{calculatedTargets.isProfileComplete ? calculatedTargets.targetFat : 'Complete profile'} g</span>
                 </div>
               </div>
             </div>
@@ -1254,10 +1242,11 @@ export default function App() {
                 <div className="space-y-1">
                   <label className="text-[11px] text-slate-400 font-semibold">Gender</label>
                   <select
-                    value={tempProfile.gender}
+                    value={tempProfile.gender || ''}
                     onChange={(e) => setTempProfile({ ...tempProfile, gender: e.target.value })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   >
+                    <option value="">Select gender</option>
                     <option value="female">Female</option>
                     <option value="male">Male</option>
                   </select>
@@ -1266,10 +1255,11 @@ export default function App() {
                 <div className="space-y-1">
                   <label className="text-[11px] text-slate-400 font-semibold">Breastfeeding</label>
                   <select
-                    value={tempProfile.breastfeeding}
+                    value={tempProfile.breastfeeding || ''}
                     onChange={(e) => setTempProfile({ ...tempProfile, breastfeeding: e.target.value })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   >
+                    <option value="">Select</option>
                     <option value="no">No</option>
                     <option value="yes">Yes (+500 kcal)</option>
                   </select>
@@ -1282,8 +1272,8 @@ export default function App() {
                   <input
                     type="number"
                     step="0.1"
-                    value={tempProfile.startWeight}
-                    onChange={(e) => setTempProfile({ ...tempProfile, startWeight: parseFloat(e.target.value) || 0 })}
+                    value={tempProfile.startWeight ?? ''}
+                    onChange={(e) => setTempProfile({ ...tempProfile, startWeight: e.target.value === '' ? '' : parseFloat(e.target.value) })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
@@ -1293,8 +1283,8 @@ export default function App() {
                   <input
                     type="number"
                     step="0.1"
-                    value={tempProfile.currentWeight}
-                    onChange={(e) => setTempProfile({ ...tempProfile, currentWeight: parseFloat(e.target.value) || 0 })}
+                    value={tempProfile.currentWeight ?? ''}
+                    onChange={(e) => setTempProfile({ ...tempProfile, currentWeight: e.target.value === '' ? '' : parseFloat(e.target.value) })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
@@ -1306,8 +1296,8 @@ export default function App() {
                   <input
                     type="number"
                     step="0.1"
-                    value={tempProfile.targetWeight}
-                    onChange={(e) => setTempProfile({ ...tempProfile, targetWeight: parseFloat(e.target.value) || 0 })}
+                    value={tempProfile.targetWeight ?? ''}
+                    onChange={(e) => setTempProfile({ ...tempProfile, targetWeight: e.target.value === '' ? '' : parseFloat(e.target.value) })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
@@ -1316,8 +1306,8 @@ export default function App() {
                   <label className="text-[11px] text-slate-400 font-semibold">Height (cm)</label>
                   <input
                     type="number"
-                    value={tempProfile.height}
-                    onChange={(e) => setTempProfile({ ...tempProfile, height: parseInt(e.target.value) || 0 })}
+                    value={tempProfile.height ?? ''}
+                    onChange={(e) => setTempProfile({ ...tempProfile, height: e.target.value === '' ? '' : parseInt(e.target.value) })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
@@ -1328,8 +1318,8 @@ export default function App() {
                   <label className="text-[11px] text-slate-400 font-semibold">Age (years)</label>
                   <input
                     type="number"
-                    value={tempProfile.age}
-                    onChange={(e) => setTempProfile({ ...tempProfile, age: parseInt(e.target.value) || 0 })}
+                    value={tempProfile.age ?? ''}
+                    onChange={(e) => setTempProfile({ ...tempProfile, age: e.target.value === '' ? '' : parseInt(e.target.value) })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
@@ -1337,10 +1327,11 @@ export default function App() {
                 <div className="space-y-1">
                   <label className="text-[11px] text-slate-400 font-semibold">Activity Level</label>
                   <select
-                    value={tempProfile.activityLevel}
+                    value={tempProfile.activityLevel || ''}
                     onChange={(e) => setTempProfile({ ...tempProfile, activityLevel: parseFloat(e.target.value) })}
                     className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                   >
+                    <option value="">Select activity level</option>
                     <option value={1.2}>Sedentary (1.2)</option>
                     <option value={1.375}>Light Active (1.375)</option>
                     <option value={1.55}>Moderate Active (1.55)</option>
@@ -1352,10 +1343,11 @@ export default function App() {
               <div className="space-y-1">
                 <label className="text-[11px] text-slate-400 font-semibold">Daily Surplus Goal</label>
                 <select
-                  value={tempProfile.surplusGoal}
+                  value={tempProfile.surplusGoal || ''}
                   onChange={(e) => setTempProfile({ ...tempProfile, surplusGoal: parseInt(e.target.value) })}
                   className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500"
                 >
+                  <option value="">Select surplus goal</option>
                   <option value={300}>Mild Surplus (+300 kcal)</option>
                   <option value={500}>Standard Surplus (+500 kcal)</option>
                   <option value={750}>Aggressive Surplus (+750 kcal)</option>
