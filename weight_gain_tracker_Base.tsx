@@ -182,17 +182,6 @@ const initialMealsData = [
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  // Keep the current online styling intact; this will be replaced by bundled
-  // local Tailwind CSS when offline/PWA support is added in the next stage.
-  useEffect(() => {
-    if (!document.getElementById('tailwind-script')) {
-      const script = document.createElement('script');
-      script.id = 'tailwind-script';
-      script.src = 'https://cdn.tailwindcss.com';
-      document.head.appendChild(script);
-    }
-  }, []);
-
   const [profile, setProfile] = useState(() => {
     // Clear the old demonstration profile and logs once after this update.
     // Deliberately preserve wg_meals so all seven preset meals remain unchanged.
